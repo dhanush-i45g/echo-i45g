@@ -7,44 +7,74 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <!-- Header -->
-    <header>
-      <div class="header__left">
-        <h1>Echo <span>i45G</span></h1>
-        <p>CLICK CHECK ON EACH CARD OR CHECK ALL AT ONCE</p>
-      </div>
-      <div class="header__right">
-        <button id="btn-upload" class="btn btn--outline">⬆ CSV Upload</button>
-        <button id="btn-add" class="btn btn--primary">+ Add Device</button>
-        <button id="btn-ping-all" class="btn btn--outline">Check All</button>
-      </div>
-    </header>
-
-    <!-- Summary Statistics -->
-    <div class="summary">
-      <div class="summary__item summary__item--total">
-        <span class="summary__label">Total</span>
-        <span class="summary__value" id="count-total">—</span>
-      </div>
-      <div class="summary__item summary__item--online">
-        <span class="summary__label">Online</span>
-        <span class="summary__value" id="count-online">—</span>
-      </div>
-      <div class="summary__item summary__item--offline">
-        <span class="summary__label">Offline</span>
-        <span class="summary__value" id="count-offline">—</span>
-      </div>
+    <!-- Parallax Background -->
+    <div id="parallax-bg" class="parallax-bg">
+      <img src="assets/bg.jpg" alt="" class="parallax-bg__img" />
+      <div class="parallax-bg__overlay"></div>
     </div>
 
-    <!-- Error Message -->
-    <div id="error"></div>
+    <!-- Floating Particles -->
+    <canvas id="particles" class="particles"></canvas>
 
-    <!-- Computer Grid -->
-    <div id="grid"></div>
+    <!-- Main App Content -->
+    <div id="app" class="app">
+      <!-- Header -->
+      <header class="header glass-nav">
+        <div class="header__left">
+          <h1 class="header__title">Echo <span>i45G</span></h1>
+          <p class="header__sub">NETWORK MONITORING SYSTEM</p>
+        </div>
+        <div class="header__right">
+          <button id="btn-upload" class="btn btn--glass">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 12 15 15"/></svg>
+            CSV Upload
+          </button>
+          <button id="btn-add" class="btn btn--glow">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Device
+          </button>
+          <button id="btn-ping-all" class="btn btn--glass">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            Check All
+          </button>
+        </div>
+      </header>
+
+      <!-- Summary Statistics -->
+      <div class="summary">
+        <div class="summary__item glass-card">
+          <span class="summary__icon">📡</span>
+          <div>
+            <span class="summary__value" id="count-total">—</span>
+            <span class="summary__label">Total</span>
+          </div>
+        </div>
+        <div class="summary__item summary__item--online glass-card">
+          <span class="summary__icon">🟢</span>
+          <div>
+            <span class="summary__value" id="count-online">—</span>
+            <span class="summary__label">Online</span>
+          </div>
+        </div>
+        <div class="summary__item summary__item--offline glass-card">
+          <span class="summary__icon">🔴</span>
+          <div>
+            <span class="summary__value" id="count-offline">—</span>
+            <span class="summary__label">Offline</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Error Message -->
+      <div id="error"></div>
+
+      <!-- Computer Grid -->
+      <div id="grid" class="grid"></div>
+    </div>
 
     <!-- Add/Edit Device Modal -->
     <div id="modal" class="modal">
-      <div class="modal__box">
+      <div class="modal__box glass-modal">
         <div class="modal__header">
           <h2 id="modal-title">Add Device</h2>
           <button id="modal-close" class="modal__close">✕</button>
@@ -61,9 +91,9 @@
           </div>
           <div class="form__group">
             <label for="form-sshkey">SSH Key</label>
-            <textarea id="form-sshkey" rows="4" placeholder="Paste SSH public/private key here..."></textarea>
+            <textarea id="form-sshkey" rows="3" placeholder="Paste SSH key here (optional)..."></textarea>
           </div>
-          <button id="form-submit" type="submit" class="btn btn--primary btn--full">
+          <button id="form-submit" type="submit" class="btn btn--glow btn--full">
             Add Device
           </button>
         </form>
@@ -72,22 +102,21 @@
 
     <!-- CSV Upload Modal -->
     <div id="csv-modal" class="modal">
-      <div class="modal__box">
+      <div class="modal__box glass-modal">
         <div class="modal__header">
           <h2>CSV Bulk Upload</h2>
           <button id="csv-modal-close" class="modal__close">✕</button>
         </div>
         <div class="csv-upload">
-          <p class="csv-upload__hint">Upload a CSV file with columns: <strong>name, ip, ssh_key</strong></p>
-          <p class="csv-upload__hint">The ssh_key column is optional. Header row is auto-detected.</p>
+          <p class="csv-upload__hint">Upload a CSV with columns: <strong>name, ip, ssh_key</strong></p>
           <div class="csv-upload__dropzone" id="csv-dropzone">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
               <polyline points="14 2 14 8 20 8"/>
               <line x1="12" y1="18" x2="12" y2="12"/>
               <polyline points="9 15 12 12 15 15"/>
             </svg>
-            <p>Drop CSV file here or <label for="csv-file" class="csv-upload__link">browse</label></p>
+            <p>Drop CSV here or <label for="csv-file" class="csv-upload__link">browse</label></p>
             <input type="file" id="csv-file" accept=".csv" hidden />
             <span id="csv-filename" class="csv-upload__filename"></span>
           </div>
@@ -95,9 +124,7 @@
             <h3>Preview</h3>
             <div id="csv-preview-table"></div>
           </div>
-          <button id="csv-submit" class="btn btn--primary btn--full" disabled>
-            Upload Devices
-          </button>
+          <button id="csv-submit" class="btn btn--glow btn--full" disabled>Upload Devices</button>
           <div id="csv-result" class="csv-upload__result" style="display:none"></div>
         </div>
       </div>
@@ -105,14 +132,14 @@
 
     <!-- Delete Confirmation Modal -->
     <div id="delete-modal" class="modal">
-      <div class="modal__box modal__box--small">
+      <div class="modal__box modal__box--small glass-modal">
         <div class="modal__header">
           <h2>Delete Device</h2>
           <button id="delete-modal-close" class="modal__close">✕</button>
         </div>
         <p id="delete-msg" class="delete-confirm__msg">Are you sure you want to delete this device?</p>
         <div class="delete-confirm__actions">
-          <button id="delete-cancel" class="btn btn--outline">Cancel</button>
+          <button id="delete-cancel" class="btn btn--glass">Cancel</button>
           <button id="delete-confirm" class="btn btn--danger">Delete</button>
         </div>
       </div>
