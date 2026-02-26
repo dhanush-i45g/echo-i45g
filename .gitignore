@@ -21,6 +21,12 @@ vendor/
 Thumbs.db
 .env.local
 
+# Ignore private keys / secrets
+*.pem
+*.key
+id_rsa
+id_ed25519
+
 # Ignore logs
 *.log
 logs/
