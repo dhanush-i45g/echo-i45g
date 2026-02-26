@@ -2,8 +2,10 @@ package main
 
 import (
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os/exec"
@@ -18,22 +20,24 @@ import (
 // ============================================================================
 // Network PC Monitoring System - Backend Server
 // ============================================================================
-// This service provides REST APIs for monitoring the status of computers
-// on a network via ping (TCP connection on port 22).
-// Uses SQLite for persistent storage.
+// REST APIs for monitoring computers on a network via ICMP ping.
+// Uses SQLite for persistent storage. Supports SSH key collection
+// for future SSH-based communication.
 // ============================================================================
 
 // Computer represents a network computer in the monitoring system
 type Computer struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-	IP   string `json:"ip"`
+	ID     int    `json:"id"`
+	Name   string `json:"name"`
+	IP     string `json:"ip"`
+	SSHKey string `json:"sshKey"`
 }
 
-// ComputerInput is the request body for adding a new computer (no ID needed)
+// ComputerInput is the request body for adding/updating a computer
 type ComputerInput struct {
-	Name string `json:"name"`
-	IP   string `json:"ip"`
+	Name   string `json:"name"`
+	IP     string `json:"ip"`
+	SSHKey string `json:"sshKey"`
 }
 
 // ComputerStatus contains the current status of a computer after a ping check
@@ -41,8 +45,16 @@ type ComputerStatus struct {
 	ID        int    `json:"id"`
 	Name      string `json:"name"`
 	IP        string `json:"ip"`
+	SSHKey    string `json:"sshKey"`
 	Status    string `json:"status"`    // "ON" or "OFF"
 	CheckedAt string `json:"checkedAt"` // Timestamp of last check
+}
+
+// CSVUploadResult contains the result of a bulk CSV upload
+type CSVUploadResult struct {
+	Added   int      `json:"added"`
+	Skipped int      `json:"skipped"`
+	Errors  []string `json:"errors,omitempty"`
 }
 
 // APIResponse is the standard response format for all API endpoints
@@ -56,10 +68,9 @@ type APIResponse struct {
 // Database
 // ============================================================================
 
-// db is the global SQLite database connection
 var db *sql.DB
 
-// initDB opens the SQLite database and creates the computers table if needed
+// initDB opens the SQLite database and creates/migrates the computers table
 func initDB() {
 	var err error
 	db, err = sql.Open("sqlite3", "./monitor.db")
@@ -67,30 +78,30 @@ func initDB() {
 		log.Fatalf("FATAL: Failed to open database: %v", err)
 	}
 
-	// Enable WAL mode for better concurrent read performance
-	_, err = db.Exec("PRAGMA journal_mode=WAL")
-	if err != nil {
-		log.Printf("WARNING: Failed to set WAL mode: %v", err)
-	}
+	_, _ = db.Exec("PRAGMA journal_mode=WAL")
 
-	// Create computers table
+	// Create table with ssh_key column
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS computers (
-			id   INTEGER PRIMARY KEY AUTOINCREMENT,
-			name TEXT    NOT NULL,
-			ip   TEXT    NOT NULL UNIQUE
+			id      INTEGER PRIMARY KEY AUTOINCREMENT,
+			name    TEXT NOT NULL,
+			ip      TEXT NOT NULL UNIQUE,
+			ssh_key TEXT NOT NULL DEFAULT ''
 		)
 	`)
 	if err != nil {
 		log.Fatalf("FATAL: Failed to create computers table: %v", err)
 	}
 
+	// Migration: add ssh_key column if table existed before without it
+	_, _ = db.Exec("ALTER TABLE computers ADD COLUMN ssh_key TEXT NOT NULL DEFAULT ''")
+
 	log.Println("INFO: Database initialized successfully")
 }
 
 // getAllComputers retrieves all computers from the database
 func getAllComputers() ([]Computer, error) {
-	rows, err := db.Query("SELECT id, name, ip FROM computers ORDER BY id")
+	rows, err := db.Query("SELECT id, name, ip, ssh_key FROM computers ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +110,7 @@ func getAllComputers() ([]Computer, error) {
 	computers := []Computer{}
 	for rows.Next() {
 		var c Computer
-		if err := rows.Scan(&c.ID, &c.Name, &c.IP); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.IP, &c.SSHKey); err != nil {
 			return nil, err
 		}
 		computers = append(computers, c)
@@ -110,17 +121,17 @@ func getAllComputers() ([]Computer, error) {
 // getComputerByID retrieves a single computer by its ID
 func getComputerByID(id string) (*Computer, error) {
 	var c Computer
-	err := db.QueryRow("SELECT id, name, ip FROM computers WHERE id = ?", id).
-		Scan(&c.ID, &c.Name, &c.IP)
+	err := db.QueryRow("SELECT id, name, ip, ssh_key FROM computers WHERE id = ?", id).
+		Scan(&c.ID, &c.Name, &c.IP, &c.SSHKey)
 	if err != nil {
 		return nil, err
 	}
 	return &c, nil
 }
 
-// insertComputer adds a new computer to the database and returns it with its generated ID
-func insertComputer(name, ip string) (*Computer, error) {
-	result, err := db.Exec("INSERT INTO computers (name, ip) VALUES (?, ?)", name, ip)
+// insertComputer adds a new computer and returns it with its generated ID
+func insertComputer(name, ip, sshKey string) (*Computer, error) {
+	result, err := db.Exec("INSERT INTO computers (name, ip, ssh_key) VALUES (?, ?, ?)", name, ip, sshKey)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +139,20 @@ func insertComputer(name, ip string) (*Computer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Computer{ID: int(newID), Name: name, IP: ip}, nil
+	return &Computer{ID: int(newID), Name: name, IP: ip, SSHKey: sshKey}, nil
+}
+
+// updateComputer updates an existing computer's fields
+func updateComputerDB(id string, name, ip, sshKey string) (*Computer, error) {
+	result, err := db.Exec("UPDATE computers SET name = ?, ip = ?, ssh_key = ? WHERE id = ?", name, ip, sshKey, id)
+	if err != nil {
+		return nil, err
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return nil, fmt.Errorf("computer not found")
+	}
+	return getComputerByID(id)
 }
 
 // ============================================================================
@@ -136,7 +160,6 @@ func insertComputer(name, ip string) (*Computer, error) {
 // ============================================================================
 
 // pingHost uses the system's ping command to check if a host is reachable via ICMP.
-// Returns "ON" if the host responds, "OFF" otherwise.
 func pingHost(ip string) string {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
@@ -144,7 +167,6 @@ func pingHost(ip string) string {
 	} else {
 		cmd = exec.Command("ping", "-c", "1", "-W", "2", ip)
 	}
-
 	if err := cmd.Run(); err != nil {
 		return "OFF"
 	}
@@ -155,15 +177,13 @@ func pingHost(ip string) string {
 // HTTP Utilities
 // ============================================================================
 
-// setCORS configures CORS headers for cross-origin requests
 func setCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	w.Header().Set("Content-Type", "application/json")
 }
 
-// writeJSON writes a JSON response with the specified HTTP status code
 func writeJSON(w http.ResponseWriter, code int, payload interface{}) {
 	w.WriteHeader(code)
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
@@ -175,220 +195,261 @@ func writeJSON(w http.ResponseWriter, code int, payload interface{}) {
 // API Endpoints
 // ============================================================================
 
-// listComputers handles GET /api/computers
-// Returns all computers from the database
+// GET /api/computers
 func listComputers(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
-
 	computers, err := getAllComputers()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, APIResponse{
-			Success: false,
-			Error:   "Failed to retrieve computers",
-		})
+		writeJSON(w, http.StatusInternalServerError, APIResponse{Success: false, Error: "Failed to retrieve computers"})
 		log.Printf("ERROR: Failed to list computers: %v", err)
 		return
 	}
-
-	writeJSON(w, http.StatusOK, APIResponse{
-		Success: true,
-		Data:    computers,
-	})
+	writeJSON(w, http.StatusOK, APIResponse{Success: true, Data: computers})
 	log.Printf("INFO: Listed %d computers", len(computers))
 }
 
-// addComputer handles POST /api/computers
-// Adds a new computer to the database with validation. ID is auto-generated.
+// POST /api/computers
 func addComputer(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 
-	// Parse request body
 	var input ComputerInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeJSON(w, http.StatusBadRequest, APIResponse{
-			Success: false,
-			Error:   "Invalid JSON body",
-		})
-		log.Printf("ERROR: Failed to decode computer data: %v", err)
+		writeJSON(w, http.StatusBadRequest, APIResponse{Success: false, Error: "Invalid JSON body"})
 		return
 	}
 
-	// Validate required fields
 	if input.Name == "" || input.IP == "" {
-		writeJSON(w, http.StatusBadRequest, APIResponse{
-			Success: false,
-			Error:   "name and ip are required",
-		})
-		log.Println("WARNING: Attempt to add computer with missing fields")
+		writeJSON(w, http.StatusBadRequest, APIResponse{Success: false, Error: "name and ip are required"})
 		return
 	}
 
-	// Insert into database (UNIQUE constraint on ip handles duplicates)
-	computer, err := insertComputer(input.Name, input.IP)
+	computer, err := insertComputer(input.Name, input.IP, input.SSHKey)
 	if err != nil {
-		// Check for duplicate IP
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-			writeJSON(w, http.StatusConflict, APIResponse{
-				Success: false,
-				Error:   "A computer with this IP already exists",
-			})
-			log.Printf("WARNING: Attempt to add duplicate IP: %s", input.IP)
+			writeJSON(w, http.StatusConflict, APIResponse{Success: false, Error: "A computer with this IP already exists"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, APIResponse{
-			Success: false,
-			Error:   "Failed to add computer",
-		})
+		writeJSON(w, http.StatusInternalServerError, APIResponse{Success: false, Error: "Failed to add computer"})
 		log.Printf("ERROR: Failed to insert computer: %v", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, APIResponse{
-		Success: true,
-		Data:    computer,
-	})
+	writeJSON(w, http.StatusCreated, APIResponse{Success: true, Data: computer})
 	log.Printf("INFO: Computer added - ID: %d, Name: %s, IP: %s", computer.ID, computer.Name, computer.IP)
 }
 
-// deleteComputer handles DELETE /api/computers/:id
-// Removes a computer from the database
+// PUT /api/computers/:id
+func updateComputer(w http.ResponseWriter, r *http.Request) {
+	setCORS(w)
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/computers/")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, APIResponse{Success: false, Error: "Missing computer ID"})
+		return
+	}
+
+	var input ComputerInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, APIResponse{Success: false, Error: "Invalid JSON body"})
+		return
+	}
+
+	if input.Name == "" || input.IP == "" {
+		writeJSON(w, http.StatusBadRequest, APIResponse{Success: false, Error: "name and ip are required"})
+		return
+	}
+
+	computer, err := updateComputerDB(id, input.Name, input.IP, input.SSHKey)
+	if err != nil {
+		if err.Error() == "computer not found" {
+			writeJSON(w, http.StatusNotFound, APIResponse{Success: false, Error: "Computer not found"})
+			return
+		}
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			writeJSON(w, http.StatusConflict, APIResponse{Success: false, Error: "A computer with this IP already exists"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, APIResponse{Success: false, Error: "Failed to update computer"})
+		log.Printf("ERROR: Failed to update computer %s: %v", id, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, APIResponse{Success: true, Data: computer})
+	log.Printf("INFO: Computer updated - ID: %s, Name: %s, IP: %s", id, computer.Name, computer.IP)
+}
+
+// DELETE /api/computers/:id
 func deleteComputer(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 
 	id := strings.TrimPrefix(r.URL.Path, "/api/computers/")
 	if id == "" {
-		writeJSON(w, http.StatusBadRequest, APIResponse{
-			Success: false,
-			Error:   "Missing computer ID",
-		})
+		writeJSON(w, http.StatusBadRequest, APIResponse{Success: false, Error: "Missing computer ID"})
 		return
 	}
 
 	result, err := db.Exec("DELETE FROM computers WHERE id = ?", id)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, APIResponse{
-			Success: false,
-			Error:   "Failed to delete computer",
-		})
-		log.Printf("ERROR: Failed to delete computer %s: %v", id, err)
+		writeJSON(w, http.StatusInternalServerError, APIResponse{Success: false, Error: "Failed to delete computer"})
 		return
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		writeJSON(w, http.StatusNotFound, APIResponse{
-			Success: false,
-			Error:   "Computer not found",
-		})
+		writeJSON(w, http.StatusNotFound, APIResponse{Success: false, Error: "Computer not found"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, APIResponse{
-		Success: true,
-		Data:    fmt.Sprintf("Computer %s deleted", id),
-	})
+	writeJSON(w, http.StatusOK, APIResponse{Success: true, Data: fmt.Sprintf("Computer %s deleted", id)})
 	log.Printf("INFO: Computer deleted - ID: %s", id)
 }
 
-// pingOne handles GET /api/ping/:id
-// Pings a specific computer and returns its status
+// POST /api/computers/upload - CSV bulk upload
+// Expected CSV format: name,ip,ssh_key (header row optional)
+func uploadCSV(w http.ResponseWriter, r *http.Request) {
+	setCORS(w)
+
+	// Limit upload size to 5MB
+	r.Body = http.MaxBytesReader(w, r.Body, 5<<20)
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, APIResponse{Success: false, Error: "No file uploaded or file too large"})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+	reader.FieldsPerRecord = -1 // Allow variable number of fields
+
+	var added, skipped int
+	var errors []string
+	lineNum := 0
+
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		lineNum++
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("Line %d: invalid CSV format", lineNum))
+			continue
+		}
+
+		// Skip header row if detected
+		if lineNum == 1 && len(record) > 0 {
+			lower := strings.ToLower(strings.TrimSpace(record[0]))
+			if lower == "name" || lower == "hostname" || lower == "computer" {
+				continue
+			}
+		}
+
+		if len(record) < 2 {
+			errors = append(errors, fmt.Sprintf("Line %d: need at least name and ip columns", lineNum))
+			skipped++
+			continue
+		}
+
+		name := strings.TrimSpace(record[0])
+		ip := strings.TrimSpace(record[1])
+		sshKey := ""
+		if len(record) >= 3 {
+			sshKey = strings.TrimSpace(record[2])
+		}
+
+		if name == "" || ip == "" {
+			errors = append(errors, fmt.Sprintf("Line %d: name and ip cannot be empty", lineNum))
+			skipped++
+			continue
+		}
+
+		_, insertErr := insertComputer(name, ip, sshKey)
+		if insertErr != nil {
+			if strings.Contains(insertErr.Error(), "UNIQUE constraint failed") {
+				errors = append(errors, fmt.Sprintf("Line %d: IP %s already exists (skipped)", lineNum, ip))
+			} else {
+				errors = append(errors, fmt.Sprintf("Line %d: %v", lineNum, insertErr))
+			}
+			skipped++
+			continue
+		}
+		added++
+	}
+
+	result := CSVUploadResult{Added: added, Skipped: skipped, Errors: errors}
+	writeJSON(w, http.StatusOK, APIResponse{Success: true, Data: result})
+	log.Printf("INFO: CSV upload - Added: %d, Skipped: %d", added, skipped)
+}
+
+// GET /api/ping/:id
 func pingOne(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 
-	// Extract computer ID from URL path
 	id := strings.TrimPrefix(r.URL.Path, "/api/ping/")
 	if id == "" {
-		writeJSON(w, http.StatusBadRequest, APIResponse{
-			Success: false,
-			Error:   "Missing computer ID",
-		})
+		writeJSON(w, http.StatusBadRequest, APIResponse{Success: false, Error: "Missing computer ID"})
 		return
 	}
 
-	// Find the computer in database
 	c, err := getComputerByID(id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, APIResponse{
-			Success: false,
-			Error:   "Computer not found",
-		})
-		log.Printf("WARNING: Attempt to ping non-existent computer ID: %s", id)
+		writeJSON(w, http.StatusNotFound, APIResponse{Success: false, Error: "Computer not found"})
 		return
 	}
 
-	// Ping the computer
 	status := pingHost(c.IP)
 	result := ComputerStatus{
-		ID:        c.ID,
-		Name:      c.Name,
-		IP:        c.IP,
-		Status:    status,
-		CheckedAt: time.Now().Format("2006-01-02 15:04:05"),
+		ID: c.ID, Name: c.Name, IP: c.IP, SSHKey: c.SSHKey,
+		Status: status, CheckedAt: time.Now().Format("2006-01-02 15:04:05"),
 	}
-	writeJSON(w, http.StatusOK, APIResponse{
-		Success: true,
-		Data:    result,
-	})
-	log.Printf("INFO: Pinged computer %s (%s) - Status: %s", c.Name, c.IP, status)
+	writeJSON(w, http.StatusOK, APIResponse{Success: true, Data: result})
+	log.Printf("INFO: Pinged %s (%s) - %s", c.Name, c.IP, status)
 }
 
-// pingAll handles GET /api/ping-all
-// Pings all computers concurrently and returns their statuses
+// GET /api/ping-all
 func pingAll(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 
 	computers, err := getAllComputers()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, APIResponse{
-			Success: false,
-			Error:   "Failed to retrieve computers",
-		})
-		log.Printf("ERROR: Failed to get computers for ping-all: %v", err)
+		writeJSON(w, http.StatusInternalServerError, APIResponse{Success: false, Error: "Failed to retrieve computers"})
 		return
 	}
 
 	now := time.Now().Format("2006-01-02 15:04:05")
 	results := make([]ComputerStatus, len(computers))
 
-	// Ping all computers concurrently using goroutines
 	var wg sync.WaitGroup
 	for i, c := range computers {
 		wg.Add(1)
 		go func(idx int, comp Computer) {
 			defer wg.Done()
 			results[idx] = ComputerStatus{
-				ID:        comp.ID,
-				Name:      comp.Name,
-				IP:        comp.IP,
-				Status:    pingHost(comp.IP),
-				CheckedAt: now,
+				ID: comp.ID, Name: comp.Name, IP: comp.IP, SSHKey: comp.SSHKey,
+				Status: pingHost(comp.IP), CheckedAt: now,
 			}
 		}(i, c)
 	}
 	wg.Wait()
 
-	writeJSON(w, http.StatusOK, APIResponse{
-		Success: true,
-		Data:    results,
-	})
+	writeJSON(w, http.StatusOK, APIResponse{Success: true, Data: results})
 
-	// Log summary
 	onCount := 0
 	for _, r := range results {
 		if r.Status == "ON" {
 			onCount++
 		}
 	}
-	log.Printf("INFO: Pinged all %d computers - Online: %d, Offline: %d", len(computers), onCount, len(computers)-onCount)
+	log.Printf("INFO: Pinged all %d - Online: %d, Offline: %d", len(computers), onCount, len(computers)-onCount)
 }
 
 // ============================================================================
 // Router
 // ============================================================================
 
-// router is the main HTTP request handler that routes requests to appropriate endpoints
 func router(w http.ResponseWriter, r *http.Request) {
-	// Handle CORS preflight requests
 	if r.Method == http.MethodOptions {
 		setCORS(w)
 		w.WriteHeader(http.StatusNoContent)
@@ -397,12 +458,15 @@ func router(w http.ResponseWriter, r *http.Request) {
 
 	path := r.URL.Path
 
-	// Route to appropriate handler
 	switch {
 	case path == "/api/computers" && r.Method == http.MethodGet:
 		listComputers(w, r)
 	case path == "/api/computers" && r.Method == http.MethodPost:
 		addComputer(w, r)
+	case path == "/api/computers/upload" && r.Method == http.MethodPost:
+		uploadCSV(w, r)
+	case strings.HasPrefix(path, "/api/computers/") && r.Method == http.MethodPut:
+		updateComputer(w, r)
 	case strings.HasPrefix(path, "/api/computers/") && r.Method == http.MethodDelete:
 		deleteComputer(w, r)
 	case strings.HasPrefix(path, "/api/ping/") && r.Method == http.MethodGet:
@@ -410,7 +474,6 @@ func router(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/ping-all" && r.Method == http.MethodGet:
 		pingAll(w, r)
 	default:
-		// Serve frontend static files
 		http.FileServer(http.Dir("../frontend")).ServeHTTP(w, r)
 	}
 }
@@ -420,21 +483,17 @@ func router(w http.ResponseWriter, r *http.Request) {
 // ============================================================================
 
 func main() {
-	// Initialize database
 	initDB()
 	defer db.Close()
 
-	// Register router
 	http.HandleFunc("/", router)
 
-	// Server configuration
 	port := ":8081"
 	log.Printf("========================================")
-	log.Printf("Network PC Monitoring System - Started")
+	log.Printf("Echo i45G - Network Monitor Started")
 	log.Printf("Server running at http://localhost%s", port)
 	log.Printf("========================================")
 
-	// Start server
 	if err := http.ListenAndServe(port, nil); err != nil {
 		log.Fatalf("FATAL: Server failed to start: %v", err)
 	}
