@@ -27,10 +27,12 @@ import (
 
 // Computer represents a network computer in the monitoring system
 type Computer struct {
-	ID     int    `json:"id"`
-	Name   string `json:"name"`
-	IP     string `json:"ip"`
-	SSHKey string `json:"sshKey"`
+	ID        int    `json:"id"`
+	Name      string `json:"name"`
+	IP        string `json:"ip"`
+	SSHKey    string `json:"sshKey"`
+	Status    string `json:"status"`
+	CheckedAt string `json:"checkedAt"`
 }
 
 // ComputerInput is the request body for adding/updating a computer
@@ -80,28 +82,32 @@ func initDB() {
 
 	_, _ = db.Exec("PRAGMA journal_mode=WAL")
 
-	// Create table with ssh_key column
+	// Create table with all columns
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS computers (
-			id      INTEGER PRIMARY KEY AUTOINCREMENT,
-			name    TEXT NOT NULL,
-			ip      TEXT NOT NULL UNIQUE,
-			ssh_key TEXT NOT NULL DEFAULT ''
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			name       TEXT NOT NULL,
+			ip         TEXT NOT NULL UNIQUE,
+			ssh_key    TEXT NOT NULL DEFAULT '',
+			status     TEXT NOT NULL DEFAULT '',
+			checked_at TEXT NOT NULL DEFAULT ''
 		)
 	`)
 	if err != nil {
 		log.Fatalf("FATAL: Failed to create computers table: %v", err)
 	}
 
-	// Migration: add ssh_key column if table existed before without it
+	// Migrations for existing databases
 	_, _ = db.Exec("ALTER TABLE computers ADD COLUMN ssh_key TEXT NOT NULL DEFAULT ''")
+	_, _ = db.Exec("ALTER TABLE computers ADD COLUMN status TEXT NOT NULL DEFAULT ''")
+	_, _ = db.Exec("ALTER TABLE computers ADD COLUMN checked_at TEXT NOT NULL DEFAULT ''")
 
 	log.Println("INFO: Database initialized successfully")
 }
 
 // getAllComputers retrieves all computers from the database
 func getAllComputers() ([]Computer, error) {
-	rows, err := db.Query("SELECT id, name, ip, ssh_key FROM computers ORDER BY id")
+	rows, err := db.Query("SELECT id, name, ip, ssh_key, status, checked_at FROM computers ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +116,7 @@ func getAllComputers() ([]Computer, error) {
 	computers := []Computer{}
 	for rows.Next() {
 		var c Computer
-		if err := rows.Scan(&c.ID, &c.Name, &c.IP, &c.SSHKey); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.IP, &c.SSHKey, &c.Status, &c.CheckedAt); err != nil {
 			return nil, err
 		}
 		computers = append(computers, c)
@@ -121,8 +127,8 @@ func getAllComputers() ([]Computer, error) {
 // getComputerByID retrieves a single computer by its ID
 func getComputerByID(id string) (*Computer, error) {
 	var c Computer
-	err := db.QueryRow("SELECT id, name, ip, ssh_key FROM computers WHERE id = ?", id).
-		Scan(&c.ID, &c.Name, &c.IP, &c.SSHKey)
+	err := db.QueryRow("SELECT id, name, ip, ssh_key, status, checked_at FROM computers WHERE id = ?", id).
+		Scan(&c.ID, &c.Name, &c.IP, &c.SSHKey, &c.Status, &c.CheckedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -171,6 +177,14 @@ func pingHost(ip string) string {
 		return "OFF"
 	}
 	return "ON"
+}
+
+// saveStatus persists the ping result into the database
+func saveStatus(id int, status, checkedAt string) {
+	_, err := db.Exec("UPDATE computers SET status = ?, checked_at = ? WHERE id = ?", status, checkedAt, id)
+	if err != nil {
+		log.Printf("ERROR: Failed to save status for computer %d: %v", id, err)
+	}
 }
 
 // ============================================================================
@@ -400,9 +414,11 @@ func pingOne(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := pingHost(c.IP)
+	checkedAt := time.Now().Format("2006-01-02 15:04:05")
+	saveStatus(c.ID, status, checkedAt)
 	result := ComputerStatus{
 		ID: c.ID, Name: c.Name, IP: c.IP, SSHKey: c.SSHKey,
-		Status: status, CheckedAt: time.Now().Format("2006-01-02 15:04:05"),
+		Status: status, CheckedAt: checkedAt,
 	}
 	writeJSON(w, http.StatusOK, APIResponse{Success: true, Data: result})
 	log.Printf("INFO: Pinged %s (%s) - %s", c.Name, c.IP, status)
@@ -426,10 +442,12 @@ func pingAll(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func(idx int, comp Computer) {
 			defer wg.Done()
+			s := pingHost(comp.IP)
 			results[idx] = ComputerStatus{
 				ID: comp.ID, Name: comp.Name, IP: comp.IP, SSHKey: comp.SSHKey,
-				Status: pingHost(comp.IP), CheckedAt: now,
+				Status: s, CheckedAt: now,
 			}
+			saveStatus(comp.ID, s, now)
 		}(i, c)
 	}
 	wg.Wait()

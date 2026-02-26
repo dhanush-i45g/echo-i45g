@@ -8,6 +8,7 @@ const API = "/api";
 let computers = [];
 let deleteTargetId = null;
 let csvFile = null;
+let statusMap = {}; // id -> { status, checkedAt }
 
 // ============================================================================
 // API Layer
@@ -114,8 +115,14 @@ let cardIndex = 0;
 
 function renderCard(computer, statusData = null) {
   const el = document.getElementById(`card-${computer.id}`);
-  const status = statusData ? statusData.status : null;
-  const checkedAt = statusData ? statusData.checkedAt : null;
+  // Use statusData override, then statusMap, then saved status from computer object
+  const sd = statusData || statusMap[computer.id] || null;
+  const status = sd ? sd.status : (computer.status || null);
+  const checkedAt = sd ? sd.checkedAt : (computer.checkedAt || null);
+
+  // Update statusMap
+  if (status) statusMap[computer.id] = { status, checkedAt };
+
   const cls = status === "ON" ? "card--on" : status === "OFF" ? "card--off" : "card--idle";
   const badge = status || "UNKNOWN";
   const time = checkedAt ? `Checked: ${checkedAt}` : "Not checked yet";
@@ -200,6 +207,25 @@ function renderAllCards() {
   document.getElementById("grid").innerHTML = "";
   computers.forEach(c => renderCard(c));
   animateValue("count-total", computers.length);
+  recalcSummary();
+}
+
+function recalcSummary() {
+  let on = 0, off = 0;
+  for (const id of Object.keys(statusMap)) {
+    if (statusMap[id].status === "ON") on++;
+    else if (statusMap[id].status === "OFF") off++;
+  }
+  // Also count from computers that have persisted status but aren't in statusMap yet
+  for (const c of computers) {
+    if (!statusMap[c.id] && c.status) {
+      if (c.status === "ON") on++;
+      else if (c.status === "OFF") off++;
+    }
+  }
+  animateValue("count-total", computers.length);
+  animateValue("count-online", on);
+  animateValue("count-offline", off);
 }
 
 // Animate numbers counting up
@@ -228,6 +254,7 @@ async function handlePingOne(id) {
     const result = await api.ping(id);
     const comp = computers.find(c => c.id === id);
     if (comp) renderCard(comp, result);
+    recalcSummary();
   } catch (e) {
     showToast(`Error: ${e.message}`, "error");
   } finally {
@@ -461,8 +488,6 @@ async function init() {
   try {
     computers = await api.list();
     renderAllCards();
-    document.getElementById("count-online").textContent = "0";
-    document.getElementById("count-offline").textContent = "0";
     console.log(`✨ Loaded ${computers.length} devices`);
   } catch (e) {
     const err = document.getElementById("error");
