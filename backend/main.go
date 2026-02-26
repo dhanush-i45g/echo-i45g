@@ -31,15 +31,17 @@ type Computer struct {
 	Name      string `json:"name"`
 	IP        string `json:"ip"`
 	SSHKey    string `json:"sshKey"`
+	SSHUser   string `json:"sshUser"`
 	Status    string `json:"status"`
 	CheckedAt string `json:"checkedAt"`
 }
 
 // ComputerInput is the request body for adding/updating a computer
 type ComputerInput struct {
-	Name   string `json:"name"`
-	IP     string `json:"ip"`
-	SSHKey string `json:"sshKey"`
+	Name    string `json:"name"`
+	IP      string `json:"ip"`
+	SSHKey  string `json:"sshKey"`
+	SSHUser string `json:"sshUser"`
 }
 
 // ComputerStatus contains the current status of a computer after a ping check
@@ -48,6 +50,7 @@ type ComputerStatus struct {
 	Name      string `json:"name"`
 	IP        string `json:"ip"`
 	SSHKey    string `json:"sshKey"`
+	SSHUser   string `json:"sshUser"`
 	Status    string `json:"status"`    // "ON" or "OFF"
 	CheckedAt string `json:"checkedAt"` // Timestamp of last check
 }
@@ -89,6 +92,7 @@ func initDB() {
 			name       TEXT NOT NULL,
 			ip         TEXT NOT NULL UNIQUE,
 			ssh_key    TEXT NOT NULL DEFAULT '',
+			ssh_user   TEXT NOT NULL DEFAULT 'root',
 			status     TEXT NOT NULL DEFAULT '',
 			checked_at TEXT NOT NULL DEFAULT ''
 		)
@@ -99,6 +103,7 @@ func initDB() {
 
 	// Migrations for existing databases
 	_, _ = db.Exec("ALTER TABLE computers ADD COLUMN ssh_key TEXT NOT NULL DEFAULT ''")
+	_, _ = db.Exec("ALTER TABLE computers ADD COLUMN ssh_user TEXT NOT NULL DEFAULT 'root'")
 	_, _ = db.Exec("ALTER TABLE computers ADD COLUMN status TEXT NOT NULL DEFAULT ''")
 	_, _ = db.Exec("ALTER TABLE computers ADD COLUMN checked_at TEXT NOT NULL DEFAULT ''")
 
@@ -107,7 +112,7 @@ func initDB() {
 
 // getAllComputers retrieves all computers from the database
 func getAllComputers() ([]Computer, error) {
-	rows, err := db.Query("SELECT id, name, ip, ssh_key, status, checked_at FROM computers ORDER BY id")
+	rows, err := db.Query("SELECT id, name, ip, ssh_key, ssh_user, status, checked_at FROM computers ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +121,7 @@ func getAllComputers() ([]Computer, error) {
 	computers := []Computer{}
 	for rows.Next() {
 		var c Computer
-		if err := rows.Scan(&c.ID, &c.Name, &c.IP, &c.SSHKey, &c.Status, &c.CheckedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.IP, &c.SSHKey, &c.SSHUser, &c.Status, &c.CheckedAt); err != nil {
 			return nil, err
 		}
 		computers = append(computers, c)
@@ -127,8 +132,8 @@ func getAllComputers() ([]Computer, error) {
 // getComputerByID retrieves a single computer by its ID
 func getComputerByID(id string) (*Computer, error) {
 	var c Computer
-	err := db.QueryRow("SELECT id, name, ip, ssh_key, status, checked_at FROM computers WHERE id = ?", id).
-		Scan(&c.ID, &c.Name, &c.IP, &c.SSHKey, &c.Status, &c.CheckedAt)
+	err := db.QueryRow("SELECT id, name, ip, ssh_key, ssh_user, status, checked_at FROM computers WHERE id = ?", id).
+		Scan(&c.ID, &c.Name, &c.IP, &c.SSHKey, &c.SSHUser, &c.Status, &c.CheckedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -136,8 +141,11 @@ func getComputerByID(id string) (*Computer, error) {
 }
 
 // insertComputer adds a new computer and returns it with its generated ID
-func insertComputer(name, ip, sshKey string) (*Computer, error) {
-	result, err := db.Exec("INSERT INTO computers (name, ip, ssh_key) VALUES (?, ?, ?)", name, ip, sshKey)
+func insertComputer(name, ip, sshKey, sshUser string) (*Computer, error) {
+	if sshUser == "" {
+		sshUser = "root"
+	}
+	result, err := db.Exec("INSERT INTO computers (name, ip, ssh_key, ssh_user) VALUES (?, ?, ?, ?)", name, ip, sshKey, sshUser)
 	if err != nil {
 		return nil, err
 	}
@@ -145,12 +153,15 @@ func insertComputer(name, ip, sshKey string) (*Computer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Computer{ID: int(newID), Name: name, IP: ip, SSHKey: sshKey}, nil
+	return &Computer{ID: int(newID), Name: name, IP: ip, SSHKey: sshKey, SSHUser: sshUser}, nil
 }
 
 // updateComputer updates an existing computer's fields
-func updateComputerDB(id string, name, ip, sshKey string) (*Computer, error) {
-	result, err := db.Exec("UPDATE computers SET name = ?, ip = ?, ssh_key = ? WHERE id = ?", name, ip, sshKey, id)
+func updateComputerDB(id string, name, ip, sshKey, sshUser string) (*Computer, error) {
+	if sshUser == "" {
+		sshUser = "root"
+	}
+	result, err := db.Exec("UPDATE computers SET name = ?, ip = ?, ssh_key = ?, ssh_user = ? WHERE id = ?", name, ip, sshKey, sshUser, id)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +248,7 @@ func addComputer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	computer, err := insertComputer(input.Name, input.IP, input.SSHKey)
+	computer, err := insertComputer(input.Name, input.IP, input.SSHKey, input.SSHUser)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			writeJSON(w, http.StatusConflict, APIResponse{Success: false, Error: "A computer with this IP already exists"})
@@ -273,7 +284,7 @@ func updateComputer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	computer, err := updateComputerDB(id, input.Name, input.IP, input.SSHKey)
+	computer, err := updateComputerDB(id, input.Name, input.IP, input.SSHKey, input.SSHUser)
 	if err != nil {
 		if err.Error() == "computer not found" {
 			writeJSON(w, http.StatusNotFound, APIResponse{Success: false, Error: "Computer not found"})
@@ -372,6 +383,10 @@ func uploadCSV(w http.ResponseWriter, r *http.Request) {
 		if len(record) >= 3 {
 			sshKey = strings.TrimSpace(record[2])
 		}
+		sshUser := "root"
+		if len(record) >= 4 {
+			sshUser = strings.TrimSpace(record[3])
+		}
 
 		if name == "" || ip == "" {
 			errors = append(errors, fmt.Sprintf("Line %d: name and ip cannot be empty", lineNum))
@@ -379,7 +394,7 @@ func uploadCSV(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		_, insertErr := insertComputer(name, ip, sshKey)
+		_, insertErr := insertComputer(name, ip, sshKey, sshUser)
 		if insertErr != nil {
 			if strings.Contains(insertErr.Error(), "UNIQUE constraint failed") {
 				errors = append(errors, fmt.Sprintf("Line %d: IP %s already exists (skipped)", lineNum, ip))
@@ -417,7 +432,7 @@ func pingOne(w http.ResponseWriter, r *http.Request) {
 	checkedAt := time.Now().Format("2006-01-02 15:04:05")
 	saveStatus(c.ID, status, checkedAt)
 	result := ComputerStatus{
-		ID: c.ID, Name: c.Name, IP: c.IP, SSHKey: c.SSHKey,
+		ID: c.ID, Name: c.Name, IP: c.IP, SSHKey: c.SSHKey, SSHUser: c.SSHUser,
 		Status: status, CheckedAt: checkedAt,
 	}
 	writeJSON(w, http.StatusOK, APIResponse{Success: true, Data: result})
@@ -444,7 +459,7 @@ func pingAll(w http.ResponseWriter, r *http.Request) {
 			defer wg.Done()
 			s := pingHost(comp.IP)
 			results[idx] = ComputerStatus{
-				ID: comp.ID, Name: comp.Name, IP: comp.IP, SSHKey: comp.SSHKey,
+				ID: comp.ID, Name: comp.Name, IP: comp.IP, SSHKey: comp.SSHKey, SSHUser: comp.SSHUser,
 				Status: s, CheckedAt: now,
 			}
 			saveStatus(comp.ID, s, now)
@@ -477,6 +492,8 @@ func router(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
 	switch {
+	case strings.HasPrefix(path, "/ws/sysinfo/"):
+		handleSysInfoWS(w, r)
 	case path == "/api/computers" && r.Method == http.MethodGet:
 		listComputers(w, r)
 	case path == "/api/computers" && r.Method == http.MethodPost:

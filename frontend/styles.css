@@ -544,6 +544,7 @@ body {
 
 .btn-action--edit:hover { color: var(--accent); }
 .btn-action--delete:hover { color: var(--off); }
+.btn-action--monitor:hover { color: var(--on); }
 
 /* Check */
 .btn-check {
@@ -888,6 +889,234 @@ body {
 }
 
 /* ============================================================================
+   System Info Panel (WebSocket Live Monitor)
+   ============================================================================ */
+
+.sysinfo-panel {
+  max-width: 680px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.sysinfo-host {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+.sysinfo-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.sysinfo-live {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  transition: color 0.3s;
+}
+
+.sysinfo-live--active {
+  color: var(--on);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.sysinfo-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  justify-content: center;
+  padding: 2.5rem 1rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.sysinfo-error {
+  background: var(--off-dim);
+  border: 1px solid rgba(255, 77, 106, 0.2);
+  color: var(--off);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 1rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  margin-bottom: 1rem;
+}
+
+.sysinfo-content {
+  animation: fadeIn 0.3s ease;
+}
+
+.sysinfo-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+}
+
+/* Individual SysInfo Card */
+.si-card {
+  padding: 0.85rem 1rem;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.2s var(--ease);
+}
+
+.si-card:hover {
+  background: var(--glass-hover);
+}
+
+.si-card--wide {
+  grid-column: 1 / -1;
+}
+
+.si-card__icon {
+  font-size: 1rem;
+  margin-bottom: 0.35rem;
+}
+
+.si-card__label {
+  font-family: var(--mono);
+  font-size: 0.56rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  margin-bottom: 0.2rem;
+}
+
+.si-card__value {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.si-card__value--small {
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.si-card__sub {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+.si-card__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.55rem;
+}
+
+.si-card__row .si-card__icon {
+  margin-bottom: 0;
+}
+
+.si-card__row .si-card__label {
+  margin-bottom: 0;
+  flex: 1;
+}
+
+.si-card__pct {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* Gauge / Progress Bar */
+.gauge {
+  height: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.gauge__fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.6s var(--ease), background 0.4s;
+  position: relative;
+}
+
+.gauge__fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+  animation: gaugeShine 2s ease-in-out infinite;
+}
+
+@keyframes gaugeShine {
+  0%, 100% { transform: translateX(-100%); }
+  50% { transform: translateX(100%); }
+}
+
+.gauge__fill--ok { background: linear-gradient(90deg, #00ffa3, #00d68f); }
+.gauge__fill--warn { background: linear-gradient(90deg, #ffc107, #ff9800); }
+.gauge__fill--crit { background: linear-gradient(90deg, #ff4d6a, #e02e4d); }
+
+.gauge__labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.35rem;
+  font-family: var(--mono);
+  font-size: 0.56rem;
+  color: var(--text-muted);
+}
+
+/* Network Interface Rows */
+.si-networks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.si-net-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.6rem;
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.si-net-name {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.si-net-ip {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--text-dim);
+}
+
+.sysinfo-ts {
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 0.55rem;
+  color: var(--text-muted);
+  margin-top: 0.75rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+/* ============================================================================
    Scrollbar
    ============================================================================ */
 
@@ -910,6 +1139,8 @@ body {
   .grid { grid-template-columns: 1fr; }
   .card__footer { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
   .card__actions { width: 100%; justify-content: flex-end; }
+  .sysinfo-grid { grid-template-columns: 1fr; }
+  .sysinfo-panel { max-height: 85vh; }
 }
 
 @media (max-width: 480px) {

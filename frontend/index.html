@@ -90,8 +90,12 @@
             <input id="form-ip" type="text" placeholder="e.g. 192.168.68.110" required />
           </div>
           <div class="form__group">
-            <label for="form-sshkey">SSH Key</label>
-            <textarea id="form-sshkey" rows="3" placeholder="Paste SSH key here (optional)..."></textarea>
+            <label for="form-sshuser">SSH User</label>
+            <input id="form-sshuser" type="text" placeholder="root (default)" />
+          </div>
+          <div class="form__group">
+            <label for="form-sshkey">SSH Private Key</label>
+            <textarea id="form-sshkey" rows="3" placeholder="Paste SSH private key here (optional)..."></textarea>
           </div>
           <button id="form-submit" type="submit" class="btn btn--glow btn--full">
             Add Device
@@ -147,6 +151,114 @@
 
     <!-- Toast Notification -->
     <div id="toast" class="toast"></div>
+
+    <!-- System Info Panel (WebSocket live stream) -->
+    <div id="sysinfo-modal" class="modal">
+      <div class="modal__box glass-modal sysinfo-panel">
+        <div class="modal__header">
+          <div>
+            <h2 id="sysinfo-title">System Information</h2>
+            <p id="sysinfo-host" class="sysinfo-host"></p>
+          </div>
+          <div class="sysinfo-controls">
+            <span id="sysinfo-live" class="sysinfo-live">● LIVE</span>
+            <button id="sysinfo-close" class="modal__close">✕</button>
+          </div>
+        </div>
+
+        <div id="sysinfo-error" class="sysinfo-error" style="display:none"></div>
+        <div id="sysinfo-loading" class="sysinfo-loading">
+          <span class="spinner"></span> Connecting via SSH…
+        </div>
+
+        <div id="sysinfo-content" class="sysinfo-content" style="display:none">
+          <div class="sysinfo-grid">
+            <!-- OS Card -->
+            <div class="si-card glass-card">
+              <div class="si-card__icon">🖥️</div>
+              <div class="si-card__label">Operating System</div>
+              <div id="si-os" class="si-card__value">—</div>
+            </div>
+            <!-- Uptime Card -->
+            <div class="si-card glass-card">
+              <div class="si-card__icon">⏱️</div>
+              <div class="si-card__label">Uptime Since</div>
+              <div id="si-uptime" class="si-card__value">—</div>
+            </div>
+            <!-- CPU Card -->
+            <div class="si-card glass-card">
+              <div class="si-card__icon">⚡</div>
+              <div class="si-card__label">CPU</div>
+              <div id="si-cpu" class="si-card__value si-card__value--small">—</div>
+              <div id="si-cores" class="si-card__sub">— cores</div>
+            </div>
+            <!-- Load Average Card -->
+            <div class="si-card glass-card">
+              <div class="si-card__icon">📊</div>
+              <div class="si-card__label">Load Average</div>
+              <div id="si-load" class="si-card__value">—</div>
+              <div id="si-procs" class="si-card__sub">— processes</div>
+            </div>
+            <!-- RAM Gauge -->
+            <div class="si-card si-card--wide glass-card">
+              <div class="si-card__row">
+                <span class="si-card__icon">🧠</span>
+                <span class="si-card__label">Memory (RAM)</span>
+                <span id="si-mem-pct" class="si-card__pct">—</span>
+              </div>
+              <div class="gauge">
+                <div id="si-mem-bar" class="gauge__fill gauge__fill--mem" style="width:0%"></div>
+              </div>
+              <div class="gauge__labels">
+                <span id="si-mem-used">Used: —</span>
+                <span id="si-mem-total">Total: —</span>
+              </div>
+            </div>
+            <!-- Swap Gauge -->
+            <div class="si-card si-card--wide glass-card">
+              <div class="si-card__row">
+                <span class="si-card__icon">🔄</span>
+                <span class="si-card__label">Swap</span>
+                <span id="si-swap-pct" class="si-card__pct">—</span>
+              </div>
+              <div class="gauge">
+                <div id="si-swap-bar" class="gauge__fill gauge__fill--swap" style="width:0%"></div>
+              </div>
+              <div class="gauge__labels">
+                <span id="si-swap-used">Used: —</span>
+                <span id="si-swap-total">Total: —</span>
+              </div>
+            </div>
+            <!-- Disk Gauge -->
+            <div class="si-card si-card--wide glass-card">
+              <div class="si-card__row">
+                <span class="si-card__icon">💾</span>
+                <span class="si-card__label">Disk (Root /)</span>
+                <span id="si-disk-pct" class="si-card__pct">—</span>
+              </div>
+              <div class="gauge">
+                <div id="si-disk-bar" class="gauge__fill gauge__fill--disk" style="width:0%"></div>
+              </div>
+              <div class="gauge__labels">
+                <span id="si-disk-used">Used: —</span>
+                <span id="si-disk-total">Total: —</span>
+              </div>
+            </div>
+            <!-- Network Card -->
+            <div class="si-card si-card--wide glass-card">
+              <div class="si-card__row">
+                <span class="si-card__icon">🌐</span>
+                <span class="si-card__label">Network Interfaces</span>
+              </div>
+              <div id="si-networks" class="si-networks">—</div>
+            </div>
+          </div>
+          <div class="sysinfo-ts">
+            Last update: <span id="si-timestamp">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <script src="app.js"></script>
   </body>

@@ -150,6 +150,13 @@ function renderCard(computer, statusData = null) {
             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
           </svg>
         </button>
+        <button class="btn-action btn-action--monitor" title="System Info">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+        </button>
         <button class="btn-check">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
@@ -181,6 +188,7 @@ function renderCard(computer, statusData = null) {
   card.querySelector(".btn-check").addEventListener("click", () => handlePingOne(computer.id));
   card.querySelector(".btn-action--edit").addEventListener("click", () => openEditModal(computer));
   card.querySelector(".btn-action--delete").addEventListener("click", () => openDeleteModal(computer.id, computer.name));
+  card.querySelector(".btn-action--monitor").addEventListener("click", () => openSysInfo(computer));
 }
 
 function setCardLoading(id, loading) {
@@ -292,6 +300,7 @@ async function handleFormSubmit(e) {
   const name = document.getElementById("form-name").value.trim();
   const ip = document.getElementById("form-ip").value.trim();
   const sshKey = document.getElementById("form-sshkey").value.trim();
+  const sshUser = document.getElementById("form-sshuser").value.trim();
 
   if (!name || !ip) { showToast("Name and IP required", "error"); return; }
 
@@ -301,12 +310,12 @@ async function handleFormSubmit(e) {
 
   try {
     if (editId) {
-      const updated = await api.update(editId, { name, ip, sshKey });
+      const updated = await api.update(editId, { name, ip, sshKey, sshUser });
       const idx = computers.findIndex(c => c.id === parseInt(editId));
       if (idx !== -1) { computers[idx] = updated; renderCard(updated); }
       showToast(`${updated.name} updated!`, "success");
     } else {
-      const nc = await api.add({ name, ip, sshKey });
+      const nc = await api.add({ name, ip, sshKey, sshUser });
       computers.push(nc);
       renderCard(nc);
       animateValue("count-total", computers.length);
@@ -420,6 +429,7 @@ function openAddModal() {
   document.getElementById("form-edit-id").value = "";
   document.getElementById("form-name").value = "";
   document.getElementById("form-ip").value = "";
+  document.getElementById("form-sshuser").value = "";
   document.getElementById("form-sshkey").value = "";
   document.getElementById("modal").classList.add("modal--open");
 }
@@ -430,6 +440,7 @@ function openEditModal(comp) {
   document.getElementById("form-edit-id").value = comp.id;
   document.getElementById("form-name").value = comp.name;
   document.getElementById("form-ip").value = comp.ip;
+  document.getElementById("form-sshuser").value = comp.sshUser || "";
   document.getElementById("form-sshkey").value = comp.sshKey || "";
   document.getElementById("modal").classList.add("modal--open");
 }
@@ -474,6 +485,142 @@ function esc(text) {
   const d = document.createElement("div");
   d.textContent = text;
   return d.innerHTML;
+}
+
+// ============================================================================
+// System Info — WebSocket Live Monitor
+// ============================================================================
+
+let sysInfoWS = null;
+
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return (bytes / Math.pow(1024, i)).toFixed(1) + " " + units[i];
+}
+
+function openSysInfo(computer) {
+  if (!computer.sshKey) {
+    showToast("No SSH key configured — add a private key first", "error");
+    return;
+  }
+
+  const modal = document.getElementById("sysinfo-modal");
+  document.getElementById("sysinfo-title").textContent = computer.name;
+  document.getElementById("sysinfo-host").textContent = `${computer.sshUser || "root"}@${computer.ip}`;
+  document.getElementById("sysinfo-loading").style.display = "flex";
+  document.getElementById("sysinfo-content").style.display = "none";
+  document.getElementById("sysinfo-error").style.display = "none";
+  document.getElementById("sysinfo-live").classList.remove("sysinfo-live--active");
+  modal.classList.add("modal--open");
+
+  // Open WebSocket
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const wsUrl = `${proto}//${location.host}/ws/sysinfo/${computer.id}`;
+  sysInfoWS = new WebSocket(wsUrl);
+
+  sysInfoWS.onmessage = (ev) => {
+    const data = JSON.parse(ev.data);
+
+    if (data.error) {
+      document.getElementById("sysinfo-loading").style.display = "none";
+      document.getElementById("sysinfo-error").textContent = `⚠️ ${data.error}`;
+      document.getElementById("sysinfo-error").style.display = "block";
+      document.getElementById("sysinfo-live").classList.remove("sysinfo-live--active");
+      return;
+    }
+
+    if (data.connected) {
+      // Connection established, waiting for first data
+      document.getElementById("sysinfo-loading").innerHTML = '<span class="spinner"></span> Collecting system data…';
+      return;
+    }
+
+    // We got system info data
+    document.getElementById("sysinfo-loading").style.display = "none";
+    document.getElementById("sysinfo-error").style.display = "none";
+    document.getElementById("sysinfo-content").style.display = "block";
+    document.getElementById("sysinfo-live").classList.add("sysinfo-live--active");
+    renderSysInfo(data);
+  };
+
+  sysInfoWS.onerror = () => {
+    document.getElementById("sysinfo-loading").style.display = "none";
+    document.getElementById("sysinfo-error").textContent = "⚠️ WebSocket connection failed";
+    document.getElementById("sysinfo-error").style.display = "block";
+  };
+
+  sysInfoWS.onclose = () => {
+    document.getElementById("sysinfo-live").classList.remove("sysinfo-live--active");
+  };
+}
+
+function closeSysInfo() {
+  if (sysInfoWS) {
+    sysInfoWS.close();
+    sysInfoWS = null;
+  }
+  document.getElementById("sysinfo-modal").classList.remove("modal--open");
+}
+
+function renderSysInfo(d) {
+  // OS & Uptime
+  document.getElementById("si-os").textContent = d.os || "—";
+  document.getElementById("si-uptime").textContent = d.uptime || "—";
+
+  // CPU
+  document.getElementById("si-cpu").textContent = d.cpu || "—";
+  document.getElementById("si-cores").textContent = `${d.cores || "—"} cores`;
+
+  // Load
+  document.getElementById("si-load").textContent = d.loadAvg || "—";
+  document.getElementById("si-procs").textContent = `${d.processes || 0} processes`;
+
+  // Memory gauge
+  const memPct = Math.min(d.memPercent || 0, 100);
+  document.getElementById("si-mem-pct").textContent = `${memPct.toFixed(1)}%`;
+  document.getElementById("si-mem-bar").style.width = `${memPct}%`;
+  setGaugeColor("si-mem-bar", memPct);
+  document.getElementById("si-mem-used").textContent = `Used: ${formatBytes(d.memUsed)}`;
+  document.getElementById("si-mem-total").textContent = `Total: ${formatBytes(d.memTotal)}`;
+
+  // Swap gauge
+  const swapPct = Math.min(d.swapPercent || 0, 100);
+  document.getElementById("si-swap-pct").textContent = d.swapTotal ? `${swapPct.toFixed(1)}%` : "N/A";
+  document.getElementById("si-swap-bar").style.width = `${swapPct}%`;
+  setGaugeColor("si-swap-bar", swapPct);
+  document.getElementById("si-swap-used").textContent = `Used: ${formatBytes(d.swapUsed)}`;
+  document.getElementById("si-swap-total").textContent = `Total: ${formatBytes(d.swapTotal)}`;
+
+  // Disk gauge
+  const diskPct = Math.min(d.diskPercent || 0, 100);
+  document.getElementById("si-disk-pct").textContent = `${diskPct.toFixed(1)}%`;
+  document.getElementById("si-disk-bar").style.width = `${diskPct}%`;
+  setGaugeColor("si-disk-bar", diskPct);
+  document.getElementById("si-disk-used").textContent = `Used: ${formatBytes(d.diskUsed)}`;
+  document.getElementById("si-disk-total").textContent = `Total: ${formatBytes(d.diskTotal)}`;
+
+  // Networks
+  const netDiv = document.getElementById("si-networks");
+  if (d.networks && d.networks.length) {
+    netDiv.innerHTML = d.networks.map(n =>
+      `<div class="si-net-row"><span class="si-net-name">${esc(n.name)}</span><span class="si-net-ip">${esc(n.ip)}${n.mask || ""}</span></div>`
+    ).join("");
+  } else {
+    netDiv.textContent = "No interfaces found";
+  }
+
+  // Timestamp
+  document.getElementById("si-timestamp").textContent = d.timestamp || "—";
+}
+
+function setGaugeColor(barId, pct) {
+  const bar = document.getElementById(barId);
+  bar.classList.remove("gauge__fill--ok", "gauge__fill--warn", "gauge__fill--crit");
+  if (pct > 85) bar.classList.add("gauge__fill--crit");
+  else if (pct > 65) bar.classList.add("gauge__fill--warn");
+  else bar.classList.add("gauge__fill--ok");
 }
 
 // ============================================================================
@@ -528,6 +675,10 @@ function setupEventListeners() {
   document.getElementById("delete-cancel").addEventListener("click", closeDeleteModal);
   document.getElementById("delete-confirm").addEventListener("click", handleDelete);
   document.getElementById("delete-modal").addEventListener("click", e => { if (e.target.id === "delete-modal") closeDeleteModal(); });
+
+  // SysInfo modal
+  document.getElementById("sysinfo-close").addEventListener("click", closeSysInfo);
+  document.getElementById("sysinfo-modal").addEventListener("click", e => { if (e.target.id === "sysinfo-modal") closeSysInfo(); });
 }
 
 setupEventListeners();
